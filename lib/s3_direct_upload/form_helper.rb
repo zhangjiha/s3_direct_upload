@@ -24,13 +24,17 @@ module S3DirectUpload
           bucket: options[:bucket] || S3DirectUpload.config.bucket,
           ssl: true,
           acl: "public-read",
+          region: S3DirectUpload.config.region || "us-east-1",
+          url: S3DirectUpload.config.url,
           expiration: 10.hours.from_now.utc.iso8601,
           max_file_size: 500.megabytes,
           callback_method: "POST",
           callback_param: "file",
+          server_side_encryption: nil,
           key_starts_with: @key_starts_with,
           key: key,
-          server_side_encryption: nil
+          date: Time.now.utc.strftime("%Y%m%d"),
+          timestamp: Time.now.utc.strftime("%Y%m%dT%H%M%SZ")
         )
       end
 
@@ -38,6 +42,7 @@ module S3DirectUpload
         {
           id: @options[:id],
           class: @options[:class],
+          enforce_utf8: false,    #Rails的form_tag会自动加上 utf-8的hidden tag, 导致无法通过Amazon的'AWS4-HMAC-SHA256'认证
           data: {
             callback_url: @options[:callback_url],
             callback_method: @options[:callback_method],
@@ -50,12 +55,14 @@ module S3DirectUpload
         {
           :key => @options[:key] || key,
           :acl => @options[:acl],
-          "AWSAccessKeyId" => @options[:aws_access_key_id],
           :policy => policy,
-          :signature => signature,
           :success_action_status => "201",
           'X-Requested-With' => 'xhr',
-          "x-amz-server-side-encryption" => @options[:server_side_encryption]
+          "x-amz-server-side-encryption" => @options[:server_side_encryption],
+          'X-Amz-Algorithm' => 'AWS4-HMAC-SHA256',
+          'X-Amz-Credential' => "#{@options[:aws_access_key_id]}/#{@options[:date]}/#{@options[:region]}/s3/aws4_request",
+          'X-Amz-Date' => @options[:timestamp],
+          'X-Amz-Signature' => signature
         }.delete_if { |k, v| v.nil? }
       end
 
@@ -77,7 +84,10 @@ module S3DirectUpload
             ["starts-with","$content-type", @options[:content_type_starts_with] ||""],
             {bucket: @options[:bucket]},
             {acl: @options[:acl]},
-            {success_action_status: "201"}
+            {success_action_status: "201"},
+            {'X-Amz-Algorithm' => 'AWS4-HMAC-SHA256'},
+            {'X-Amz-Credential' => "#{@options[:aws_access_key_id]}/#{@options[:date]}/#{@options[:region]}/s3/aws4_request"},
+            {'X-Amz-Date' => @options[:timestamp]}
           ] + server_side_encryption + (@options[:conditions] || [])
         }
       end
@@ -90,13 +100,18 @@ module S3DirectUpload
         end
       end
 
+      def signing_key
+        #AWS Signature Version 4
+        kDate    = OpenSSL::HMAC.digest('sha256', "AWS4" + @options[:aws_secret_access_key], @options[:date])
+        kRegion  = OpenSSL::HMAC.digest('sha256', kDate, @options[:region])
+        kService = OpenSSL::HMAC.digest('sha256', kRegion, 's3')
+        kSigning = OpenSSL::HMAC.digest('sha256', kService, "aws4_request")
+
+        kSigning
+      end
+
       def signature
-        Base64.encode64(
-          OpenSSL::HMAC.digest(
-            OpenSSL::Digest.new('sha1'),
-            @options[:aws_secret_access_key], policy
-          )
-        ).gsub("\n", "")
+        OpenSSL::HMAC.hexdigest('sha256', signing_key, policy)
       end
     end
   end
