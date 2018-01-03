@@ -23,7 +23,7 @@ module S3DirectUpload
           aws_secret_access_key: S3DirectUpload.config.secret_access_key,
           bucket: options[:bucket] || S3DirectUpload.config.bucket,
           ssl: true,
-          acl: "public-read",
+          acl: "private",
           region: S3DirectUpload.config.region || "us-east-1",
           url: S3DirectUpload.config.url,
           expiration: 10.hours.from_now.utc.iso8601,
